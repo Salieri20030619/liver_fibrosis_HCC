@@ -1,0 +1,23 @@
+import os
+for k in ['OMP_NUM_THREADS','OPENBLAS_NUM_THREADS','MKL_NUM_THREADS']:os.environ[k]='2'
+from pathlib import Path
+import json,hashlib
+import numpy as np,pandas as pd
+from scipy.stats import rankdata,spearmanr,false_discovery_control
+P=Path(__file__).parent;O=P/'F6D_all_discovered_TF_fibrosis_v1';O.mkdir(exist_ok=False);src=P/'F6F_GSE162694_signature_v1';edge=P/'F5_GSE244832_regulon_v1/CSI_review_v1/all_motif_pruned_regulon_targets.tsv';tf=sorted(pd.read_csv(edge,sep='\t').TF.unique());assert len(tf)>0
+rules={'candidate_set':'Every unique TF from all motif-pruned discovery regulons, frozen before checking this cohort; no original-axis or RSS-top10 restriction','endpoint':'Cross-sectional fibrosis stage within112NASH samples only;31normal-histology samples excluded, not merged with NASH_F0','exposure':'TF transcript log2CPM, not regulon activity or cell abundance','statistics':'Two-sided Spearman;10000shared stage-label permutations,seed0,+1 correction;BH family includes all discovered TFs, unavailable/constant p=1','limitations':'Not incident HCC or causal regulation; unadjusted association; residual clinical confounding; this validation cohort was previously viewed for other analyses, not prospective blind validation','selection_sha256':hashlib.sha256(edge.read_bytes()).hexdigest(),'TFs':tf};(O/'analysis_rules_frozen.json').write_text(json.dumps(rules,indent=2));pd.DataFrame({'TF':tf}).to_csv(O/'frozen_TF_set.tsv',sep='\t',index=False)
+x=pd.read_csv(src/'log2CPM_full_background.tsv.gz',sep='\t',index_col=0);m=pd.read_csv(src/'sample_design.tsv',sep='\t',index_col=0,keep_default_na=False);assert x.columns.tolist()==m.index.tolist() and len(m)==143;use=m.group.str.startswith('NASH_F');meta=m.loc[use].copy();assert len(meta)==112;stage=meta['fibrosis stage'].astype(int).to_numpy();assert pd.Series(stage).value_counts().to_dict()=={0:35,1:30,2:27,3:8,4:12};meta.to_csv(O/'included_sample_design.tsv',sep='\t');available=[t for t in tf if t in x.index and x.loc[t,meta.index].nunique()>1];ex=x.loc[available,meta.index].T;assert np.isfinite(ex).all().all();ex.to_csv(O/'TF_expression_log2CPM.tsv',sep='\t')
+z=np.apply_along_axis(rankdata,0,ex.to_numpy());z=z-z.mean(axis=0);z=z/np.linalg.norm(z,axis=0);y=rankdata(stage);y=y-y.mean();y=y/np.linalg.norm(y);rho=z.T@y;gen=np.random.default_rng(0);yp=np.column_stack([gen.permutation(y) for _ in range(10000)]);null=z.T@yp;pval=(1+(np.abs(null)>=np.abs(rho[:,None])-1e-12).sum(axis=1))/10001
+rows=[]
+for t in tf:
+ if t in available:
+  j=available.index(t);s=spearmanr(ex[t],stage);assert np.isclose(s.statistic,rho[j]);rows.append({'TF':t,'status':'tested','n':112,'rho':rho[j],'p_asymptotic':s.pvalue,'p_permutation':pval[j]})
+ else:rows.append({'TF':t,'status':'unmapped_or_constant','n':112,'rho':np.nan,'p_asymptotic':1.,'p_permutation':1.})
+tab=pd.DataFrame(rows);tab['q_BH_all_discovered_TFs']=false_discovery_control(tab.p_permutation.to_numpy());tab.to_csv(O/'all_TF_fibrosis_associations.tsv',sep='\t',index=False)
+# All expression trends are retained; display selection is effect magnitude, not significance.
+means=ex.groupby(stage).mean();means.index.name='fibrosis_stage';means.to_csv(O/'all_TF_stage_means_log2CPM.tsv',sep='\t')
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
+show=tab[tab.status.eq('tested')].assign(absrho=lambda q:q.rho.abs()).sort_values(['absrho','TF'],ascending=[False,True]).head(30).TF;v=means[show].T;v=v.sub(v.mean(axis=1),axis=0).div(v.std(axis=1).replace(0,np.nan),axis=0).fillna(0);fig,ax=plt.subplots(figsize=(7,9));im=ax.imshow(v,aspect='auto',cmap='RdBu_r',vmin=-2,vmax=2);ax.set_yticks(range(len(v)),v.index,fontsize=8);ax.set_xticks(range(5),['F0 n35','F1 n30','F2 n27','F3 n8','F4 n12']);ax.set_title('GSE162694 NASH only | TF transcript expression\nTop30 absolute correlations for display; all TFs retained');fig.colorbar(im,ax=ax,label='Row z-score of stage means');fig.tight_layout();fig.savefig(O/'all_TF_fibrosis_trends_top30_display.png',dpi=180);plt.close(fig)
+result={'status':'complete','candidate_TFs':len(tf),'tested_TFs':len(available),'unavailable_or_constant':len(tf)-len(available),'samples':112,'permutations':10000,'seed':0,'BH_q_lt_0_05':int((tab.q_BH_all_discovered_TFs<.05).sum()),'normal_histology_excluded':31,'source_expression_sha256':hashlib.sha256((src/'log2CPM_full_background.tsv.gz').read_bytes()).hexdigest(),'source_metadata_sha256':hashlib.sha256((src/'sample_design.tsv').read_bytes()).hexdigest(),'endpoint_is_not_HCC_incidence':True,'not_regulon_activity_validation':True};(O/'validation.json').write_text(json.dumps(result,indent=2));print(json.dumps(result))

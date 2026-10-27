@@ -1,0 +1,20 @@
+.libPaths(c('/mnt/BioData/bio/wangmingyuan/liver_fibrosis_HCC_audit_20261016/end_to_end_20261020/R_library','/mnt/BioData/bio/wangmingyuan/liver_fibrosis_HCC_audit_20261016/analysis_stage1_20261017_075157UTC/irGSEA_dependencies_v1/R_project_library_v1','/mnt/BioData/bio/wangmingyuan/liver_fibrosis_HCC_audit_20261016/analysis_stage1_20261017_075157UTC/trajectory_dependencies_v1/R_project_library_v1',.libPaths()))
+library(glmnet);library(mboost);library(plsRglm)
+x<-as.matrix(read.delim('/mnt/BioData/bio/wangmingyuan/liver_fibrosis_HCC_audit_20261016/end_to_end_20261020/F8_F9_real_full_cohort_v1/train_features.tsv',row.names=1,check.names=FALSE));e<-as.matrix(read.delim('/mnt/BioData/bio/wangmingyuan/liver_fibrosis_HCC_audit_20261016/end_to_end_20261020/F8_F9_real_full_cohort_v1/external_features.tsv',row.names=1,check.names=FALSE));y<-read.delim('/mnt/BioData/bio/wangmingyuan/liver_fibrosis_HCC_audit_20261016/end_to_end_20261020/F8_F9_real_full_cohort_v1/train_design.tsv',row.names=1)$y;ey<-read.delim('/mnt/BioData/bio/wangmingyuan/liver_fibrosis_HCC_audit_20261016/end_to_end_20261020/F8_F9_real_full_cohort_v1/external_design.tsv',row.names=1)$y;fold<-read.delim('/mnt/BioData/bio/wangmingyuan/liver_fibrosis_HCC_audit_20261016/end_to_end_20261020/F8_F9_real_full_cohort_v1/outer_cv_folds.tsv')$fold
+auc<-function(y,p){r<-rank(p);n1<-sum(y==1);n0<-sum(y==0);(sum(r[y==1])-n1*(n1+1)/2)/(n1*n0)}
+prepare<-function(a,b,c,y){mu<-colMeans(a);sdv<-apply(a,2,sd);sdv[sdv==0]<-1;a<-scale(a,mu,sdv);b<-scale(b,mu,sdv);c<-scale(c,mu,sdv);f<-colnames(a);while(length(f)>max(3,floor(ncol(a)/2))){fit<-glmnet(a[,f,drop=FALSE],y,family='binomial',alpha=0,lambda=1/nrow(a),standardize=FALSE);coefv<-abs(as.numeric(coef(fit))[-1]);f<-f[-which.min(coefv)]};list(a=as.data.frame(a[,f,drop=FALSE]),b=as.data.frame(b[,f,drop=FALSE]),c=as.data.frame(c[,f,drop=FALSE]),features=f,mean=mu,sd=sdv)}
+configs<-c('Stepglm_backward','Stepglm_both','glmBoost_100','glmBoost_200','plsRglm_2','plsRglm_3');metrics<-list();external<-list();oofall<-list()
+fitpredict<-function(name,a,y,b){
+ if(grepl('Stepglm',name)){d<-a;d$y<-y;fit<-step(glm(y~.,data=d,family=binomial()),direction=if(grepl('backward',name))'backward' else 'both',trace=0);pred<-predict(fit,newdata=b,type='response')}
+ if(grepl('glmBoost',name)){d<-a;d$y<-factor(y,levels=c(0,1));fit<-glmboost(y~.,data=d,family=Binomial(),control=boost_control(mstop=as.integer(sub('glmBoost_','',name))));pred<-predict(fit,newdata=b,type='response')}
+ if(grepl('plsRglm',name)){fit<-plsRglm(object=y,dataX=a,nt=as.integer(sub('plsRglm_','',name)),modele='pls-glm-family',family='binomial',verbose=FALSE);pred<-predict(fit,newdata=b,type='response',verbose=FALSE)}
+ list(model=fit,p=as.numeric(pred))
+}
+
+for(context in c('full',as.character(0:9))){
+ fp<-paste0('/mnt/BioData/bio/wangmingyuan/liver_fibrosis_HCC_audit_20261016/end_to_end_20261020/continuation_stack_search_v1/inner_folds_',context,'.tsv');while(!file.exists(fp))Sys.sleep(10)
+ folds<-read.delim(fp);ids<-match(folds$sample,rownames(x));stopifnot(!anyNA(ids));xx<-x[ids,,drop=FALSE];yy<-y[ids];out<-matrix(NA_real_,nrow(xx),length(configs),dimnames=list(rownames(xx),configs))
+ for(k in 0:4){tr<-folds$inner_fold!=k;te<-!tr;z<-prepare(xx[tr,,drop=FALSE],xx[te,,drop=FALSE],xx[te,,drop=FALSE],yy[tr]);for(name in configs){out[te,name]<-fitpredict(name,z$a,yy[tr],z$b)$p;cat(context,k,name,'\n');flush.console()}}
+ stopifnot(all(is.finite(out)));write.table(data.frame(sample=rownames(out),out,check.names=FALSE),paste0('/mnt/BioData/bio/wangmingyuan/liver_fibrosis_HCC_audit_20261016/end_to_end_20261020/continuation_stack_search_v1/R_inner_oof_',context,'.tsv'),sep='\t',quote=FALSE,row.names=FALSE)
+}
+writeLines('complete','/mnt/BioData/bio/wangmingyuan/liver_fibrosis_HCC_audit_20261016/end_to_end_20261020/continuation_stack_search_v1/R_cache_COMPLETE.txt');writeLines(capture.output(sessionInfo()),'/mnt/BioData/bio/wangmingyuan/liver_fibrosis_HCC_audit_20261016/end_to_end_20261020/continuation_stack_search_v1/R_cache_sessionInfo.txt')

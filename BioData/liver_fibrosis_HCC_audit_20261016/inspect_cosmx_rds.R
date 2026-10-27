@@ -1,0 +1,25 @@
+args <- commandArgs(trailingOnly=TRUE)
+stopifnot(length(args)==3, file.exists(args[1]), !dir.exists(args[3]))
+dir.create(args[3], recursive=FALSE)
+x <- readRDS(args[1])
+sink(file.path(args[3], "object_structure.txt"))
+cat("Object class:",class(x),"\n")
+cat("Attributes:",names(attributes(x)),"\n")
+cat("S4:",isS4(x),"\n")
+sink()
+m <- attr(x,"meta.data",exact=TRUE)
+if(is.null(m) && is.list(x)) m <- x$meta.data
+stopifnot(is.data.frame(m))
+out <- data.frame(cell_id=rownames(m),m,check.names=FALSE)
+write.table(out,file.path(args[3],"cell_metadata.tsv"),sep="\t",quote=TRUE,row.names=FALSE,na="NA")
+summ <- lapply(names(m),function(k) {
+ v <- as.character(m[[k]]);u <- unique(v)
+ data.frame(column=k,rows=length(v),missing=sum(is.na(v)|v==""),distinct=length(u),examples=paste(head(sort(u),30),collapse=" | "))
+})
+write.table(do.call(rbind,summ),file.path(args[3],"metadata_column_summary.tsv"),sep="\t",quote=TRUE,row.names=FALSE)
+sink(file.path(args[3],"additional_annotations.txt"))
+for(k in intersect(c("misc","tools","images"),names(attributes(x)))) {
+ cat("\nATTRIBUTE",k,"\n");str(attr(x,k),max.level=3,list.len=30,vec.len=5)
+}
+sink()
+cat("Parsed",args[2],nrow(m),"cells;",ncol(m),"metadata columns\n")

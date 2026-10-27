@@ -1,0 +1,24 @@
+from pathlib import Path
+import json,numpy as np,pandas as pd,anndata as ad,scipy.sparse as sp
+P=Path(__file__).parent;D=P.parent/'analysis_stage1_20261017_075157UTC';O=P/'continuation_annotation_evidence_v1';O.mkdir(exist_ok=False)
+sets={'Hepatocyte':['ASGR1','CYP3A4','CPS1','ALB','APOA1','TTR','CYP2E1','HNF4A','SLC10A1'],'Endothelial':['PECAM1','VWF','KDR','EMCN','STAB2','CLEC4G','CLEC4M','FCGR2B','PLVAP'],'Myeloid':['LYZ','LST1','TYROBP','FCER1G','CSF1R','MARCO','CD163','C1QA','C1QB','C1QC','CD68','MSR1'],'T_NK':['CD3D','CD3E','CD2','TRAC','NKG7','GNLY','KLRD1','GZMA'],'B':['MS4A1','CD79A','CD79B','CD74','CD37','CD19'],'Plasma':['JCHAIN','MZB1','SDC1','IGHG1'],'Stromal':['COL1A1','COL1A2','COL3A1','DCN','LUM','PDGFRA','HGF','LRAT','RBP1','RELN'],'Mural':['RGS5','CSPG4','MCAM','NOTCH3','MYH11','ACTA2','TAGLN'],'Cholangiocyte':['KRT19','KRT7','EPCAM','SOX9','CFTR','KRT8','KRT18'],'Neutrophil':['FCGR3B','CSF3R','S100A8','S100A9','CXCR2'],'Cycling':['MKI67','TOP2A','ANLN','BUB1B']}
+(O/'marker_panels.json').write_text(json.dumps({'panels':sets,'source':'Original paper P18 canonical lineage anchors plus explicitly reconstructed broader lineage support panels; not predefined DTNA or mechanism; cycling is state not lineage.'},indent=2))
+m=pd.read_csv(P/'core55_Seurat_Harmony_repaired_v3/cell_metadata_with_annotation.tsv',sep='\t',index_col=0);a=ad.read_h5ad(P/'GSE202379_core39_QC/core39_counts.h5ad');b=ad.read_h5ad(D/'GSE244832/qc_pass_counts.h5ad');sy=b.var.gene_symbol_original.astype(str);b=b[:,~sy.duplicated(keep=False)].copy();b.var_names=b.var.gene_symbol_original.astype(str)
+a.obs_names='GSE202379|'+a.obs_names;b.obs_names='GSE244832|'+b.obs_names;b=b[m.index[m.study.eq('GSE244832')]].copy();common=a.var_names.intersection(b.var_names,sort=False);x=sp.vstack([a[:,common].X,b[:,common].X]).tocsr();assert list(a.obs_names)+list(b.obs_names)==list(m.index);del a,b
+out=ad.AnnData(x,obs=m.copy(),var=pd.DataFrame(index=common));out.write_h5ad(O/'core55_record_counts.h5ad',compression='gzip');print('counts ready',out.shape,flush=True)
+total=np.asarray(x.sum(axis=1)).ravel();norm=x.multiply((1e4/np.maximum(total,1))[:,None]).tocsr();norm.data=np.log1p(norm.data);cluster=m.seurat_clusters.to_numpy();cl=np.unique(cluster);mat=sp.csr_matrix((np.ones(len(m)),(np.searchsorted(cl,cluster),np.arange(len(m)))),shape=(len(cl),len(m)));n=np.asarray(mat.sum(axis=1)).ravel();mean=(mat@norm).toarray()/n[:,None];det=(mat@(x>0)).toarray()/n[:,None];z=(mean-mean.mean(axis=0))/np.maximum(mean.std(axis=0),1e-8)
+rows=[];scores=[]
+for label,genes in sets.items():
+ g=[g for g in genes if g in common];ix=common.get_indexer(g)
+ for j,c in enumerate(cl):
+  scores.append({'cluster':int(c),'lineage':label,'mean_gene_z':float(np.mean(z[j,ix])),'median_gene_z':float(np.median(z[j,ix])),'markers_detected_over10pct':int((det[j,ix]>.1).sum()),'marker_count':len(g)})
+  for k,gene in enumerate(g):rows.append({'cluster':int(c),'lineage':label,'gene':gene,'mean_log1pCP10k':mean[j,ix[k]],'pct_detected':det[j,ix[k]],'gene_z_across_clusters':z[j,ix[k]]})
+pd.DataFrame(rows).to_csv(O/'complete_marker_evidence.tsv',sep='\t',index=False);pd.DataFrame(scores).to_csv(O/'cluster_marker_specificity.tsv',sep='\t',index=False)
+# Per-cell contradictory lineage co-detection is a diagnostic flag, not a doublet call.
+diag=m[['study','donor','GSM','seurat_clusters']].copy();diag['library_UMI_common_features']=total
+for label,genes in sets.items():
+ g=[g for g in genes if g in common];raw=x[:,common.get_indexer(g)];diag[label+'_markers_detected']=np.asarray((raw>0).sum(axis=1)).ravel();diag[label+'_UMI_fraction']=np.asarray(raw.sum(axis=1)).ravel()/np.maximum(total,1)
+diag['hep_myeloid_codetection_flag']=(diag.Hepatocyte_markers_detected>=3)&(diag.Myeloid_markers_detected>=3);diag['immune_stromal_codetection_flag']=(diag.Myeloid_markers_detected>=3)&(diag.Stromal_markers_detected>=3);diag.to_csv(O/'cell_lineage_codetection_diagnostics.tsv.gz',sep='\t')
+# Compare independently sourced, already marker-reviewed human liver data; not ground truth or new training labels.
+r=ad.read_h5ad(D/'GSE136103/qc_pass_counts.h5ad');ref=pd.read_csv(D/'coarse_celltype_review_v2/GSE136103_reviewed_cell_metadata.tsv.gz',sep='\t',index_col=0);(O/'reference_fields.json').write_text(json.dumps({'obs_columns':list(r.obs),'review_columns':list(ref),'review_head':ref.head(3).astype(str).to_dict()},indent=2))
+v={'status':'evidence_ready','records':m.donor.nunique(),'confirmed_global_independent_people':None,'cells':len(m),'clusters':len(cl),'reference_cells':r.n_obs,'marker_features':len(set(sum(sets.values(),[]))&set(common)),'limits':'Source-scoped patient labels not globally proven independent. No automatic identity assignment yet. Co-detection flags are not proof of ambient RNA/doublets. Missing empty droplets limits ambient estimation.'};(O/'validation.json').write_text(json.dumps(v,indent=2));print(json.dumps(v),flush=True)

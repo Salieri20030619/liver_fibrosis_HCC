@@ -1,0 +1,15 @@
+# Usage: Rscript predict_frozen_model.R PROJECT_ROOT INPUT_30GENE_TSV OUTPUT_TSV
+# Input rows are sample IDs, columns must exactly match the frozen 30 gene names.
+args<-commandArgs(trailingOnly=TRUE);stopifnot(length(args)==3)
+root<-normalizePath(args[1]);P<-dirname(root);D<-file.path(dirname(P),"analysis_stage1_20261017_075157UTC")
+.libPaths(c(file.path(root,"R_randomForestSRC_3.3.2"),file.path(root,"R_library"),file.path(P,"R_library"),file.path(D,"trajectory_dependencies_v1/R_project_library_v1"),file.path(D,"irGSEA_dependencies_v1/R_project_library_v1"),.libPaths()))
+for(p in c("jsonlite","e1071","MASS","glmnet","mboost","plsRglm","randomForestSRC","gbm","xgboost"))stopifnot(requireNamespace(p,quietly=TRUE))
+source(file.path(root,"code","repaired_core_PLS_v5.R"))
+current<-jsonlite::read_json(file.path(root,"CURRENT_RESULTS.json"),simplifyVector=TRUE)
+v<-jsonlite::read_json(file.path(root,current$results,"validation.json"),simplifyVector=TRUE)
+obj<-readRDS(file.path(root,current$jobs,"full","frozen_external","selected_frozen_model.rds"))
+x<-as.matrix(read.delim(args[2],row.names=1,check.names=FALSE))
+stopifnot(!anyDuplicated(rownames(x)),!file.exists(args[3]))
+z<-preprocess_apply(obj$preprocessing,x)
+p<-predict_family_one(obj$model,z[,obj$selected_features,drop=FALSE],obj$parameter)
+write.table(data.frame(sample=rownames(x),probability_F3_F4=p,fixed_training_threshold=v$fixed_threshold,predicted_F3_F4=as.integer(p>=v$fixed_threshold)),args[3],sep="\t",quote=FALSE,row.names=FALSE)

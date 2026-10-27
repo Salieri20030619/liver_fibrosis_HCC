@@ -1,0 +1,7 @@
+from pathlib import Path
+import subprocess,os,json
+P=Path(__file__).parent;D=P.parent/'analysis_stage1_20261017_075157UTC';O=P/'F4_irGSEA_retry';O.mkdir(exist_ok=False)
+r=f""".libPaths(c('{P}/R_library','{D}/irGSEA_dependencies_v1/R_project_library_v1','{D}/trajectory_dependencies_v1/R_project_library_v1',.libPaths()));library(irGSEA);library(Seurat);writeLines(capture.output(args(irGSEA.integrate)),'{O}/API.txt');writeLines(deparse(body(irGSEA.integrate)),'{O}/integrate_source.R');obj<-readRDS('{D}/F4_irGSEA_official_v2/GSE244832/not_explicit_donor_object.rds');print(table(obj$group));res<-tryCatch(irGSEA.integrate(obj,group.by='group',method=c('AUCell','UCell','singscore','ssgsea'),p.value='p_val_adj'),error=function(e){{writeLines(c(conditionMessage(e),capture.output(sys.calls())),'{O}/integration_error.txt');NULL}});if(!is.null(res)){{saveRDS(res,'{O}/integrated.rds');writeLines(capture.output(str(res,max.level=2)),'{O}/result_structure.txt')}};writeLines(capture.output(sessionInfo()),'{O}/sessionInfo.txt')"""
+(O/'run.R').write_text(r);env=os.environ.copy();n=D/'dependency_irgsea_repair_v3/native_dependencies/lib';env['LD_PRELOAD']=str(n/'libstdc++.so.6')+':'+str(n/'libdeflate.so.0');env['LD_LIBRARY_PATH']=str(n)
+with open(O/'R.log','w') as log:z=subprocess.run(['/usr/bin/Rscript','--vanilla',str(O/'run.R')],stdout=log,stderr=subprocess.STDOUT,env=env)
+print(json.dumps({'returncode':z.returncode,'completed':(O/'integrated.rds').exists(),'error':(O/'integration_error.txt').read_text() if (O/'integration_error.txt').exists() else ''}))

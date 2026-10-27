@@ -1,0 +1,30 @@
+import os
+for k in ['OMP_NUM_THREADS','OPENBLAS_NUM_THREADS','MKL_NUM_THREADS']:os.environ[k]='2'
+from pathlib import Path
+import json,subprocess,traceback,hashlib
+import numpy as np,pandas as pd,anndata as ad,scipy.io
+P=Path(__file__).parent;O=P/'F5_myeloid_potential_topology_v1';O.mkdir(exist_ok=False)
+try:
+ m=pd.read_csv(P/'F5_GSE244832_regulon_v1/cell_metadata.tsv',sep='\t',index_col=0,keep_default_na=False);m=m[m.regulon_role.eq('discovery_MASH')].copy();assert len(m)==2022 and m.donor.nunique()==8
+ src=ad.read_h5ad(P/'GSE244832/qc_pass_counts.h5ad',backed='r');a=src[m.index,:].to_memory();src.file.close();assert np.isfinite(a.X.data).all() and (a.X.data>=0).all() and np.allclose(a.X.data,np.rint(a.X.data));scipy.io.mmwrite(O/'counts.mtx',a.X.T);m.to_csv(O/'cell_metadata.tsv',sep='\t');pd.DataFrame({'gene_id':a.var_names,'gene_short_name':a.var.gene_symbol_original.to_numpy()}).to_csv(O/'gene_metadata.tsv',sep='\t',index=False)
+ sub=ad.read_h5ad(P/'F2_Roe_F3_F4_subclusters_v1/GSE244832_Myeloid/subcluster_checkpoint.h5ad',backed='r');genes=[g for g in sub.var_names if g in a.var_names];sub.file.close();assert len(genes)>1000;(O/'ordering_genes.txt').write_text('\n'.join(genes))
+ scope={'cohort':'GSE244832','cells':len(m),'donors':8,'raw_genes':a.n_vars,'ordering_genes':len(genes),'selection':'Same frozen MASH discovery cells as F5 regulons; D9/D10 and unresolved cluster8 excluded','ordering_features':'Reuse previously fixed myeloid-atlas HVGs, not disease-selected; original feature specification unavailable','root_assigned':False,'limits':'Potential scores and unrooted topology only. No ordered pseudotime, branch dynamic claims, HCC progression or independent validation. F3/F4 kept in donor metadata.','algorithm':'Official CytoTRACE and Monocle2 DDRTree; seed0; CytoTRACE fast subsamplesize1000,ncores2'};(O/'scope.json').write_text(json.dumps(scope,indent=2))
+ r='''args<-commandArgs(trailingOnly=TRUE);d<-args[1];lib<-args[2];.libPaths(c(lib,.Library));library(monocle);library(Matrix);set.seed(0)
+x<-readMM(file.path(d,'counts.mtx'));cell<-read.delim(file.path(d,'cell_metadata.tsv'),row.names=1,check.names=FALSE);gene<-read.delim(file.path(d,'gene_metadata.tsv'),check.names=FALSE);rownames(gene)<-gene$gene_id;rownames(x)<-gene$gene_id;colnames(x)<-rownames(cell)
+cds<-newCellDataSet(as(x,'dgCMatrix'),phenoData=new('AnnotatedDataFrame',data=cell),featureData=new('AnnotatedDataFrame',data=gene),expressionFamily=negbinomial.size());cds<-estimateSizeFactors(cds);cds<-setOrderingFilter(cds,readLines(file.path(d,'ordering_genes.txt')));cds<-reduceDimension(cds,max_components=2,reduction_method='DDRTree',norm_method='log',pseudo_expr=1,relative_expr=TRUE,verbose=TRUE);saveRDS(cds,file.path(d,'DDRTree_unrooted.rds'));xy<-t(reducedDimS(cds));stopifnot(identical(rownames(xy),rownames(cell)));write.table(cbind(cell_id=rownames(xy),xy),file.path(d,'DDRTree_coordinates.tsv'),sep='\t',row.names=FALSE,quote=FALSE)
+set.seed(0);z<-CytoTRACE::CytoTRACE(as.matrix(x),enableFast=TRUE,ncores=2,subsamplesize=1000);saveRDS(z,file.path(d,'CytoTRACE_official_result.rds'));tab<-data.frame(cell_id=names(z$CytoTRACE),CytoTRACE=z$CytoTRACE,detected_genes=z$Counts,GCS=z$GCS);write.table(tab,file.path(d,'cell_scores.tsv'),sep='\t',row.names=FALSE,quote=FALSE);writeLines(z$filteredCells,file.path(d,'algorithm_filtered_cells.txt'));writeLines(capture.output(sessionInfo()),file.path(d,'sessionInfo.txt'))
+''';(O/'run.R').write_text(r);env=os.environ.copy();native=P/'dependency_irgsea_repair_v3/native_dependencies/lib';env['LD_PRELOAD']=str(native/'libstdc++.so.6')+':'+str(native/'libdeflate.so.0');env['LD_LIBRARY_PATH']=str(native)
+ with open(O/'R.log','w') as log:ret=subprocess.run(['/usr/bin/Rscript','--vanilla',str(O/'run.R'),str(O),str(P/'trajectory_dependencies_v1/R_project_library_v1')],stdout=log,stderr=subprocess.STDOUT,env=env)
+ assert ret.returncode==0
+ scores=pd.read_csv(O/'cell_scores.tsv',sep='\t',index_col=0);xy=pd.read_csv(O/'DDRTree_coordinates.tsv',sep='\t',index_col=0);assert xy.index.equals(m.index);assert scores.index.is_unique and set(scores.index)<=set(m.index);scores=scores.reindex(m.index);ok=scores.CytoTRACE.notna();assert np.isfinite(scores.loc[ok,'CytoTRACE']).all() and scores.loc[ok,'CytoTRACE'].between(0,1).all();assert np.isfinite(xy).all().all()
+ full=m.join(scores);full.groupby(['donor','F_stage_from_Figure4C']).CytoTRACE.agg(['mean','median','count']).to_csv(O/'donor_scores.tsv',sep='\t');full.groupby(['donor','subcluster_preliminary']).CytoTRACE.agg(['mean','count']).to_csv(O/'donor_subcluster_scores.tsv',sep='\t')
+ import matplotlib
+ matplotlib.use('Agg')
+ import matplotlib.pyplot as plt
+ fig,axes=plt.subplots(1,2,figsize=(13,5));im=axes[0].scatter(xy.iloc[:,0][ok],xy.iloc[:,1][ok],c=scores.CytoTRACE[ok],s=5,cmap='viridis',vmin=0,vmax=1);fig.colorbar(im,ax=axes[0],label='Official CytoTRACE');axes[0].set_title('Potential score on unrooted topology')
+ for cl,idx in m.groupby('subcluster_preliminary').groups.items():axes[1].scatter(xy.loc[idx].iloc[:,0],xy.loc[idx].iloc[:,1],s=5,label=str(cl))
+ axes[1].legend(title='Numeric cluster',markerscale=2,fontsize=8);axes[1].set_title('Reviewed macrophage-like subclusters')
+ for ax in axes:ax.set_xlabel('DDRTree1');ax.set_ylabel('DDRTree2')
+ fig.suptitle('8 MASH donors | no root, direction or HCC progression inferred');fig.tight_layout();fig.savefig(O/'F5_myeloid_potential_unrooted.png',dpi=180);plt.close(fig)
+ result={**scope,'status':'validated','scored_cells':int(ok.sum()),'unscored_cells':int((~ok).sum()),'coordinate_ID_order_exact':True,'score_gene_detection_spearman':float(scores.loc[ok,'CytoTRACE'].corr(scores.loc[ok,'detected_genes'],method='spearman')),'output_hashes':{q.name:hashlib.sha256(q.read_bytes()).hexdigest() for q in O.iterdir() if q.is_file() and q.suffix in ['.tsv','.png','.rds']}};(O/'validation.json').write_text(json.dumps(result,indent=2));print(json.dumps(result),flush=True)
+except Exception:(O/'error.txt').write_text(traceback.format_exc());raise

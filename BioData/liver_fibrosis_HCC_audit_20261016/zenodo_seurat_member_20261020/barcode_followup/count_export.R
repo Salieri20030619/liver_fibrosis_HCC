@@ -1,0 +1,12 @@
+args<-commandArgs(TRUE);p<-args[1];out<-file.path(p,'barcode_followup')
+obj<-readRDS(file.path(p,'MASLD_snRNA_seq_seurat_v4.rds'));md<-attr(obj,'meta.data');assays<-attr(obj,'assays')
+info<-lapply(names(assays),function(n){a<-assays[[n]];list(name=n,class=class(a),slots=names(attributes(a)))})
+capture.output(str(info),file=file.path(out,'assay_structure.txt'))
+stopifnot('RNA'%in%names(assays));counts<-attr(assays[['RNA']],'counts');stopifnot(inherits(counts,'sparseMatrix'))
+req<-read.csv(file.path(out,'count_comparison_requests.csv'),stringsAsFactors=FALSE)
+cells<-unique(req$object_cell_id);stopifnot(all(cells%in%colnames(counts)))
+sel<-counts[,cells,drop=FALSE]
+cat('RNA counts dimensions:',dim(counts),'selected:',dim(sel),'\n')
+writeLines(rownames(sel),file.path(out,'object_count_features.txt'));writeLines(colnames(sel),file.path(out,'object_count_cells.txt'))
+Matrix::writeMM(sel,file.path(out,'object_selected_counts.mtx'))
+write.csv(data.frame(rows=nrow(counts),cols=ncol(counts),selected_cells=ncol(sel),integer_counts=all(sel@x==floor(sel@x)),nonnegative=all(sel@x>=0)),file.path(out,'count_export_summary.csv'),row.names=FALSE)

@@ -1,0 +1,7 @@
+args<-commandArgs(trailingOnly=TRUE);d<-args[1];lib<-args[2];.libPaths(c(lib,.Library));library(monocle);library(Matrix);set.seed(0)
+x<-readMM(file.path(d,'counts.mtx'));cell<-read.delim(file.path(d,'cell_metadata.tsv'),row.names=1,check.names=FALSE);gene<-read.delim(file.path(d,'gene_metadata.tsv'),check.names=FALSE);rownames(gene)<-gene$gene_id;rownames(x)<-gene$gene_id;colnames(x)<-rownames(cell)
+cds<-newCellDataSet(as(x,'dgCMatrix'),phenoData=new('AnnotatedDataFrame',data=cell),featureData=new('AnnotatedDataFrame',data=gene),expressionFamily=negbinomial.size())
+cds<-estimateSizeFactors(cds);cds<-setOrderingFilter(cds,readLines(file.path(d,'ordering_genes.txt')))
+cds<-reduceDimension(cds,max_components=2,reduction_method='DDRTree',norm_method='log',pseudo_expr=1,relative_expr=TRUE,verbose=TRUE)
+saveRDS(cds,file.path(d,'DDRTree_unrooted.rds'));xy<-t(reducedDimS(cds));write.table(cbind(cell_id=rownames(xy),xy),file.path(d,'DDRTree_coordinates.tsv'),sep='	',row.names=FALSE,quote=FALSE)
+png(file.path(d,'F3H_unrooted_DDRTree.png'),width=1500,height=1000,res=150);par(mar=c(5,5,4,10));cl<-as.factor(cell$subcluster_preliminary);plot(xy[,1],xy[,2],col=as.integer(cl),pch=16,cex=.3,xlab='DDRTree 1',ylab='DDRTree 2',main='Unrooted mesenchymal topology: no developmental direction');legend('topright',legend=levels(cl),col=seq_along(levels(cl)),pch=16,cex=.6);dev.off();writeLines(capture.output(sessionInfo()),file.path(d,'sessionInfo.txt'))

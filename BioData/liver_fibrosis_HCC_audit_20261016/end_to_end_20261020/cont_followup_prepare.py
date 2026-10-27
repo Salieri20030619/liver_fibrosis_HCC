@@ -1,0 +1,9 @@
+import os
+os.environ['NUMBA_NUM_THREADS']='4'
+from pathlib import Path
+import numpy as np,pandas as pd,anndata as ad,scanpy as sc,json,hashlib
+from scipy.io import mmwrite
+P=Path(__file__).parent;O=P/'continuation_followup_inputs_v1';O.mkdir(exist_ok=False);mfile=P/'continuation_annotation_refined_v1/cell_metadata_reviewed.tsv.gz';m=pd.read_csv(mfile,sep='\t',index_col=0);a=ad.read_h5ad(P/'continuation_annotation_evidence_v1/core55_record_counts.h5ad');assert a.obs_names.equals(m.index);assert a.var_names.is_unique;rows=[]
+for branch,labels in [('F5',['Myeloid']),('F3',['Stromal','Mural'])]:
+ q=O/branch;q.mkdir();b=a[m.reviewed_broad_lineage.isin(labels)].copy();b.obs=m.loc[b.obs_names].copy();b=b[:,np.asarray((b.X>0).sum(0)).ravel()>=3].copy();mmwrite(str(q/'raw_counts.mtx'),b.X.T);(q/'genes.txt').write_text('\n'.join(b.var_names)+'\n');(q/'cells.txt').write_text('\n'.join(b.obs_names)+'\n');b.obs.to_csv(q/'metadata.tsv',sep='\t');norm=b.copy();sc.pp.normalize_total(norm,target_sum=1e4);sc.pp.log1p(norm);sc.pp.highly_variable_genes(norm,n_top_genes=3000,flavor='seurat');(q/'ordering_genes.txt').write_text('\n'.join(norm.var_names[norm.var.highly_variable])+'\n');row={'branch':branch,'cells':b.n_obs,'genes':b.n_vars,'source_records':b.obs.donor.nunique(),'states':b.obs.refined_cluster.nunique(),'ordering_genes':int(norm.var.highly_variable.sum())};rows.append(row);print(json.dumps(row),flush=True)
+v={'status':'completed','branches':rows,'final_metadata_sha256':hashlib.sha256(mfile.read_bytes()).hexdigest(),'sampling':'All cells with final supported lineage; no cell subsampling. Genes detected >=3cells; top3000 Seurat-dispersion HVG on log1pCP10K for ordering.','limits':'F3 combines stromal/mural, not pureHSC. Source records not confirmed independent people; no ambientRNA resolution.'};(O/'validation.json').write_text(json.dumps(v,indent=2))

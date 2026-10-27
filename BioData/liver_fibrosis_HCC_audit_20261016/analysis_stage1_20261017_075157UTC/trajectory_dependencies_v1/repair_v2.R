@@ -1,0 +1,10 @@
+lib<-'/mnt/BioData/bio/wangmingyuan/liver_fibrosis_HCC_audit_20261016/analysis_stage1_20261017_075157UTC/trajectory_dependencies_v1/R_project_library_v1'
+.libPaths(c(lib,'/mnt/BioData/bio/wangmingyuan/liver_fibrosis_HCC_audit_20261016/analysis_stage1_20261017_075157UTC/trajectory_dependencies_v1/R_project_library_v1',.Library))
+Sys.setenv(USE_BUNDLED_LIBUV='1')
+options(timeout=600,Ncpus=4,repos=c(CRAN='https://cloud.r-project.org'))
+install.packages('fs',lib=lib)
+options(repos=BiocManager::repositories())
+BiocManager::install('AUCell',lib=lib,ask=FALSE,update=FALSE,Ncpus=4)
+try(remotes::install_github('gunsagargulati/CytoTRACE',lib=lib,upgrade='never',dependencies=NA))
+pkgs<-c('monocle','UCell','AUCell','CytoTRACE')
+z<-data.frame(package=pkgs,available=sapply(pkgs,requireNamespace,quietly=TRUE));write.table(z,file='/mnt/BioData/bio/wangmingyuan/liver_fibrosis_HCC_audit_20261016/analysis_stage1_20261017_075157UTC/trajectory_dependencies_v1/repair_v2_status.tsv',sep='\t',row.names=FALSE,quote=FALSE)
